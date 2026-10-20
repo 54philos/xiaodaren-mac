@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>点读伙伴</string>
+<key>CFBundleDisplayName</key><string>点读伙伴</string>
+<key>CFBundleIdentifier</key><string>local.readingpartner.xiaodaren</string>
+<key>CFBundleExecutable</key><string>TalkingPen</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleShortVersionString</key><string>0.5.0</string>
+<key>CFBundleVersion</key><string>10</string>
+<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>NSRemovableVolumesUsageDescription</key><string>读取小达人点读笔中的书目，并在你操作时安装或移除点读包。</string>
+<key>NSDownloadsFolderUsageDescription</key><string>读取你选择的 DAB 点读包。</string>
+<key>CFBundleDocumentTypes</key><array><dict>
+<key>CFBundleTypeName</key><string>小达人点读包</string>
+<key>CFBundleTypeExtensions</key><array><string>dab</string><string>das</string><string>dar</string></array>
+<key>CFBundleTypeRole</key><string>Viewer</string>
+<key>LSHandlerRank</key><string>Alternate</string>
+</dict></array>
+</dict></plist>

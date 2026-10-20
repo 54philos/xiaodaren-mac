@@ -1,0 +1,16 @@
+# Local build outputs
+.build/
+dist/
+*.app/
+.DS_Store
+
+# Personal reading packages, device data and release binaries
+*.dab
+*.das
+*.dar
+*.mp3
+*.wav
+*.apk
+*.exe
+*.zip
+PRODUCT.INI
