@@ -26,6 +26,11 @@ root=Path(sys.argv[2])
 PY
     FLAGS+=(-vfsoverlay "$BUILD_DIR/overlay.json" -Xcc -ivfsoverlay -Xcc "$BUILD_DIR/overlay.json")
 fi
+if [ "${1:-build}" = ui-test ]; then
+    env -u CPATH xcrun swiftc "${FLAGS[@]}" -D PEN_UI_TESTING "$SOURCE_DIR/Sources/PenCore.swift" "$SOURCE_DIR/Sources/PenApp.swift" "$SOURCE_DIR/Tests/UIRegressionTests.swift" -o "$BUILD_DIR/UIRegressionTests"
+    "$BUILD_DIR/UIRegressionTests"
+    exit 0
+fi
 if [ "${1:-build}" = test ]; then
     env -u CPATH xcrun swiftc "${FLAGS[@]}" "$SOURCE_DIR/Sources/PenCore.swift" "$SOURCE_DIR/Tests/CoreTests.swift" -o "$BUILD_DIR/CoreTests"
     shift

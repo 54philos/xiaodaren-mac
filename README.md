@@ -7,7 +7,7 @@
 
 ## 下载与适用范围
 
-普通用户请前往 **[Releases 下载最新版](https://github.com/54philos/xiaodaren-mac/releases/latest)**，选择 `DianduPartner-0.5.0-macOS-arm64.zip`。解压后把「点读伙伴.app」拖到「应用程序」。GitHub 自动提供的 Source code 压缩包是源码，不是可直接运行的应用。
+普通用户请前往 **[Releases 下载最新版](https://github.com/54philos/xiaodaren-mac/releases/latest)**，选择 `DianduPartner-0.5.1-macOS-arm64.zip`。解压后把「点读伙伴.app」拖到「应用程序」。GitHub 自动提供的 Source code 压缩包是源码，不是可直接运行的应用。
 
 | 项目 | 当前支持情况 |
 | --- | --- |
@@ -61,6 +61,7 @@
 ```sh
 bash build.sh
 bash build.sh test
+bash build.sh ui-test
 ```
 
 构建结果位于 `dist/点读伙伴.app`。默认按当前 Mac 的处理器架构构建；发行包目前只提供 arm64。`PEN_BUILD_DIR` 和 `PEN_APP_DIR` 可分别指定中间文件和应用输出位置。
