@@ -18,6 +18,7 @@ import UniformTypeIdentifiers
     @Published var progress = 0.0
     @Published var status = "请关机后，用数据线连接小达人点读笔。"
     @Published var errorText: String?
+    @Published var ejectSucceeded = false
     @Published var loadingBooks = false
     @Published var freeBytes: Int64?
     @Published var fullVerification = UserDefaults.standard.bool(forKey: "fullVerification") {
@@ -27,11 +28,21 @@ import UniformTypeIdentifiers
     private var discovering = false
     private var refreshTicket = UUID()
     private var catalogStamp: [CatalogEntry] = []
+    private let ejectDevice: (URL) throws -> Void
+    private let loadCatalog: (Pen) throws -> ([Book], [CatalogEntry])
     var filteredBooks: [Book] {
         books.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) || $0.url.lastPathComponent.localizedCaseInsensitiveContains(search) }.sorted(using: sortOrder)
     }
     var selectedBooks: [Book] { filteredBooks.filter { selection.contains($0.id) } }
-    init() {
+    init(startMonitoring: Bool = true,
+         ejectDevice: @escaping (URL) throws -> Void = { try NSWorkspace.shared.unmountAndEjectDevice(at: $0) },
+         loadCatalog: @escaping (Pen) throws -> ([Book], [CatalogEntry]) = { device in
+             let stamp = try PenCore.catalog(device)
+             return (try PenCore.books(device), stamp)
+         }) {
+        self.ejectDevice = ejectDevice
+        self.loadCatalog = loadCatalog
+        guard startMonitoring else { return }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 4, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.discover() }
@@ -69,11 +80,9 @@ import UniformTypeIdentifiers
         if !preserveContent { selection = []; books = []; freeBytes = nil }
         loadingBooks = true
         if announce { status = "已连接，正在后台读取书目…" }
+        let loadCatalog = loadCatalog
         DispatchQueue.global(qos: .utility).async {
-            let result = Result {
-                let stamp = try PenCore.catalog(device)
-                return (try PenCore.books(device), stamp)
-            }
+            let result = Result { try loadCatalog(device) }
             let disk = try? FileManager.default.attributesOfFileSystem(forPath: device.root.path)
             let free = (disk?[.systemFreeSize] as? NSNumber)?.int64Value
             DispatchQueue.main.async {
@@ -149,7 +158,7 @@ import UniformTypeIdentifiers
         search = ""; selection = []
         sortOrder = [KeyPathComparator(\Book.slot), KeyPathComparator(\Book.ext)]
     }
-    func run(_ message: String, onSuccess: (() -> Void)? = nil, work: @escaping () throws -> String) {
+    func run(_ message: String, refreshAfter: Bool = true, onSuccess: (() -> Void)? = nil, work: @escaping () throws -> String) {
         refreshTicket = UUID()
         loadingBooks = false
         busy = true; status = message; progress = 0
@@ -163,7 +172,7 @@ import UniformTypeIdentifiers
                     self.status = text; self.progress = 1
                 case .failure(let error): self.errorText = error.localizedDescription; self.status = "操作未完成 · 请查看提示"
                 }
-                self.refresh(announce: false)
+                if refreshAfter { self.refresh(announce: false) }
             }
         }
     }
@@ -199,23 +208,7 @@ import UniformTypeIdentifiers
         let count = chosen.count
         let total = chosen.reduce(UInt64(0)) { $0 + $1.size }
         let size = ByteCountFormatter.string(fromByteCount: Int64(clamping: total), countStyle: .file)
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = count == 1 ? "移除 \(chosen[0].url.lastPathComponent)？" : "移除所选 \(count) 个点读包？"
-        alert.informativeText = "\(count == 1 ? chosen[0].title + "\n\n" : "")共 \(count) 个，\(size)。\n将直接删除点读笔中的所选文件，不会创建备份，移除后无法撤销。电脑上的源点读包不受影响。"
-        if count > 1 {
-            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: CGFloat(min(240, count * 40))))
-            scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder
-            let text = NSTextView(frame: scroll.bounds)
-            text.isEditable = false; text.isSelectable = true
-            text.font = .systemFont(ofSize: 12)
-            text.string = chosen.map { "\($0.url.lastPathComponent)  ·  \($0.title)" }.joined(separator: "\n\n")
-            text.isVerticallyResizable = true; text.autoresizingMask = .width
-            text.textContainer?.widthTracksTextView = true
-            scroll.documentView = text
-            alert.accessoryView = scroll
-        }
-        alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "移除")
+        let alert = RemovalConfirmation.makeAlert(books: chosen)
         guard alert.runModal() == .alertSecondButtonReturn else { return }
         run("正在移除 \(count) 个点读包，请保持连接…") {
             try PenCore.remove(books: chosen, pen: pen) { done, total in
@@ -228,20 +221,76 @@ import UniformTypeIdentifiers
         }
     }
     func eject() {
-        guard let pen else { return }
-        run("正在安全推出…") {
-            try NSWorkspace.shared.unmountAndEjectDevice(at: pen.root)
-            return "已安全推出，现在可以拔线并测试点读。"
+        guard !busy, let pen else { return }
+        let ejectDevice = ejectDevice
+        run("正在安全推出…", refreshAfter: false, onSuccess: {
+            // Discard any catalog/discovery result started before the unmount.
+            self.refreshTicket = UUID()
+            self.pen = nil
+            self.devices.removeAll { $0.root == pen.root }
+            self.books = []; self.selection = []; self.catalogStamp = []
+            self.freeBytes = nil; self.loadingBooks = false
+            self.errorText = nil
+            self.ejectSucceeded = true
+        }) {
+            do { try ejectDevice(pen.root) }
+            catch { throw PenError("未能安全推出。请关闭正在使用点读笔的其他程序后，再试一次。") }
+            return "已安全推出，现在可以拔掉点读笔了。"
         }
     }
 }
 
+@MainActor enum RemovalConfirmation {
+    static func makeAlert(books: [Book]) -> NSAlert {
+        precondition(!books.isEmpty)
+        let count = books.count
+        let total = books.reduce(UInt64(0)) { $0 + $1.size }
+        let size = ByteCountFormatter.string(fromByteCount: Int64(clamping: total), countStyle: .file)
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = count == 1 ? "移除 \(books[0].url.lastPathComponent)？" : "移除 \(count) 个文件？"
+        alert.informativeText = "\(count == 1 ? books[0].title + "\n\n" : "")共 \(count) 个，\(size)。\n将直接删除点读笔中的所选文件，不会创建备份，移除后无法撤销。电脑上的源点读包不受影响。"
+        if count > 1 {
+            // Keep the dialog compact and the same size for any number of files.
+            let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 260, height: 112))
+            scroll.hasVerticalScroller = true; scroll.hasHorizontalScroller = false
+            scroll.autohidesScrollers = false; scroll.borderType = .bezelBorder
+            let text = NSTextView(frame: scroll.contentView.bounds)
+            text.isEditable = false; text.isSelectable = true
+            text.font = .systemFont(ofSize: 12); text.textColor = .labelColor
+            text.textContainerInset = NSSize(width: 6, height: 6)
+            text.string = books.map {
+                let size = ByteCountFormatter.string(fromByteCount: Int64(clamping: $0.size), countStyle: .file)
+                return "\($0.url.lastPathComponent) · \(size)\n\($0.title)"
+            }.joined(separator: "\n\n")
+            text.isVerticallyResizable = true; text.isHorizontallyResizable = false
+            text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+            text.autoresizingMask = .width
+            text.textContainer?.widthTracksTextView = true
+            scroll.documentView = text
+            if let container = text.textContainer, let layout = text.layoutManager {
+                layout.ensureLayout(for: container)
+                text.setFrameSize(NSSize(width: text.frame.width, height: max(scroll.contentSize.height, layout.usedRect(for: container).height + 12)))
+            }
+            alert.accessoryView = scroll
+        }
+        alert.addButton(withTitle: "取消"); alert.addButton(withTitle: "移除")
+        return alert
+    }
+}
+
+#if !PEN_UI_TESTING
 struct PenView: View {
     @ObservedObject var model: PenModel
     private static let brandIcon: NSImage? = {
         guard let url = Bundle.main.url(forResource: "BrandMark", withExtension: "png") else { return nil }
         return NSImage(contentsOf: url)
     }()
+    private var noticePresented: Binding<Bool> {
+        Binding(get: { model.ejectSucceeded || model.errorText != nil }, set: {
+            if !$0 { model.errorText = nil; model.ejectSucceeded = false }
+        })
+    }
     var body: some View {
         HStack(spacing: 0) {
             VStack(alignment: .leading, spacing: 22) {
@@ -270,7 +319,7 @@ struct PenView: View {
                 }
                 Spacer()
                 Button("安全推出", systemImage: "eject") { model.eject() }.disabled(model.pen == nil)
-                Text("实验版 0.5.0").font(.caption).foregroundStyle(.secondary)
+                Text("实验版 0.5.1").font(.caption).foregroundStyle(.secondary)
             }
             .padding(24).frame(width: 220).frame(maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .controlBackgroundColor))
@@ -356,9 +405,9 @@ struct PenView: View {
         }
         .frame(minWidth: 1030, minHeight: 720)
         .onChange(of: model.search) { _, _ in model.selection.formIntersection(Set(model.filteredBooks.map(\.id))) }
-        .alert("操作提示", isPresented: Binding(get: { model.errorText != nil }, set: { if !$0 { model.errorText = nil } })) {
-            Button("知道了") { model.errorText = nil }
-        } message: { Text(model.errorText ?? "") }
+        .alert(model.ejectSucceeded ? "已安全推出" : "操作提示", isPresented: noticePresented) {
+            Button("知道了") { model.errorText = nil; model.ejectSucceeded = false }
+        } message: { Text(model.ejectSucceeded ? "现在可以拔掉点读笔了。" : (model.errorText ?? "")) }
     }
 }
 
@@ -381,3 +430,4 @@ struct PenView: View {
         }
     }
 }
+#endif
